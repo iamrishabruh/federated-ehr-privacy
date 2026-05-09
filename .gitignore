@@ -35,6 +35,7 @@ logs/
 
 # Generated plots (if they are auto-generated and you prefer not to track them)
 plots/
+results/
 
 # Others (optional, customize as needed)
 *.swp

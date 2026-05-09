@@ -1,122 +1,104 @@
+"""Optional Streamlit UI wrapping the PyTorch federated simulation in ``src``."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
 import streamlit as st
-import os
-import numpy as np
-import tensorflow as tf
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from src.federated import FederatedConfig, run_federated_simulation
+from src.visualization import plot_federated_rounds
 
-# Import the simulation function from main.py.
-from main import simulate_federated_learning
+st.set_page_config(page_title="Federated EHR benchmark (simulation)", layout="wide")
 
-st.set_page_config(page_title="Federated Learning Simulation", layout="wide")
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
 
-# ------------------------------------------------
-# Session State Setup
-# ------------------------------------------------
-if "global_model" not in st.session_state:
-    st.session_state.global_model = None
-if "simulation_params" not in st.session_state:
-    st.session_state.simulation_params = {
-        "NUM_CLIENTS": 5,           # integer
-        "NUM_EPOCHS": 15,           # integer
-        "BATCH_SIZE": 128,          # integer
-        "NUM_GLOBAL_ROUNDS": 1,     # integer
-        "GLOBAL_LR": 0.013,         # float
-        "DP_learning_rate": 0.005,  # float
-        "sensitivity": 0.5,         # float
-        "l2_norm_clip": 2.25,       # float
-        "noise_multiplier": 0.36,   # float
-        "decay_schedule": "linear", # string
-        "RESET_GLOBAL_MODEL": False # boolean
-    }
+st.sidebar.header("Data & federation")
+data_path = st.sidebar.text_input("CSV path", value="data/synthetic_ehr_fixture.csv")
+partition = st.sidebar.selectbox("Partition", ["iid", "dirichlet", "label_skew"])
+dirichlet_alpha = st.sidebar.slider("Dirichlet alpha", 0.1, 1.0, 0.5)
+num_clients = st.sidebar.number_input("Clients", min_value=2, value=4, step=1)
+global_rounds = st.sidebar.number_input("Global rounds", min_value=1, value=3, step=1)
+local_epochs = st.sidebar.number_input("Local epochs", min_value=1, value=2, step=1)
+batch_size = st.sidebar.number_input("Batch size", min_value=2, value=8, step=1)
+lr = st.sidebar.number_input("Local learning rate", min_value=1e-4, value=0.1, format="%.4f")
+global_lr = st.sidebar.number_input("FedAvg mix (1=pure average)", min_value=0.0, value=1.0, format="%.2f")
 
-# ------------------------------------------------
-# Sidebar: Parameter Controls
-# ------------------------------------------------
-st.sidebar.header("Federated Learning Parameters")
+st.sidebar.header("Differential privacy (local DP-SGD style)")
+dp_enabled = st.sidebar.checkbox("Enable DP noise + clipping", value=False)
+l2_clip = st.sidebar.number_input("L2 clip C", min_value=0.1, value=1.0, format="%.2f")
+noise_multiplier = st.sidebar.number_input("Noise multiplier σ", min_value=0.0, value=0.5, format="%.2f")
 
-st.session_state.simulation_params["NUM_CLIENTS"] = st.sidebar.number_input(
-    "Number of Clients", min_value=1,
-    value=st.session_state.simulation_params["NUM_CLIENTS"],
-    step=1
-)
-st.session_state.simulation_params["NUM_EPOCHS"] = st.sidebar.number_input(
-    "Local Epochs per Round", min_value=1,
-    value=st.session_state.simulation_params["NUM_EPOCHS"],
-    step=1
-)
-st.session_state.simulation_params["BATCH_SIZE"] = st.sidebar.number_input(
-    "Batch Size", min_value=16,
-    value=st.session_state.simulation_params["BATCH_SIZE"],
-    step=1
-)
-st.session_state.simulation_params["NUM_GLOBAL_ROUNDS"] = st.sidebar.number_input(
-    "Global Rounds", min_value=1,
-    value=st.session_state.simulation_params["NUM_GLOBAL_ROUNDS"],
-    step=1
+st.sidebar.header("Other")
+seed = int(st.sidebar.number_input("Seed", value=42, step=1))
+run_mia = st.sidebar.checkbox("Run loss-based MIA probe", value=True)
+
+st.title("Federated learning + local DP (simulation)")
+st.caption(
+    "This is a research-style benchmark, not a regulated healthcare deployment. "
+    "See README for threat model and privacy accounting limitations."
 )
 
-st.session_state.simulation_params["GLOBAL_LR"] = st.sidebar.number_input(
-    "Global Learning Rate", min_value=0.0001,
-    value=st.session_state.simulation_params["GLOBAL_LR"],
-    format="%.4f"
-)
-st.session_state.simulation_params["DP_learning_rate"] = st.sidebar.number_input(
-    "DP Learning Rate", min_value=0.0001,
-    value=st.session_state.simulation_params["DP_learning_rate"],
-    format="%.4f"
-)
-st.session_state.simulation_params["sensitivity"] = st.sidebar.number_input(
-    "Sensitivity", min_value=0.1,
-    value=st.session_state.simulation_params["sensitivity"],
-    format="%.4f"
-)
-st.session_state.simulation_params["l2_norm_clip"] = st.sidebar.number_input(
-    "L2 Norm Clipping", min_value=0.1,
-    value=st.session_state.simulation_params["l2_norm_clip"],
-    format="%.4f"
-)
-st.session_state.simulation_params["noise_multiplier"] = st.sidebar.number_input(
-    "Base Noise Multiplier", min_value=0.01,
-    value=st.session_state.simulation_params["noise_multiplier"],
-    format="%.4f"
-)
+if st.button("Run simulation"):
+    cfg = FederatedConfig(
+        seed=seed,
+        data_path=data_path,
+        test_size=0.25,
+        val_size=0.15,
+        partition=partition,  # type: ignore[arg-type]
+        dirichlet_alpha=float(dirichlet_alpha),
+        num_clients=int(num_clients),
+        num_global_rounds=int(global_rounds),
+        local_epochs=int(local_epochs),
+        batch_size=int(batch_size),
+        learning_rate=float(lr),
+        global_lr=float(global_lr),
+        dp_enabled=bool(dp_enabled),
+        l2_clip=float(l2_clip),
+        noise_multiplier=float(noise_multiplier),
+        hidden1=32,
+        hidden2=16,
+        dropout1=0.0,
+        dropout2=0.0,
+        device="cpu",
+        run_mia_probe=run_mia,
+    )
+    with st.spinner("Training..."):
+        result = run_federated_simulation(cfg)
+    Path("plots").mkdir(exist_ok=True)
+    plot_federated_rounds(result.history, Path("plots/streamlit_last_round.png"), "val_accuracy")
+    st.session_state.last_result = result
+    st.success("Finished.")
 
-st.session_state.simulation_params["decay_schedule"] = st.sidebar.selectbox(
-    "Decay Schedule", options=["exponential", "linear"],
-    index=0 if st.session_state.simulation_params["decay_schedule"] == "exponential" else 1
-)
-st.session_state.simulation_params["RESET_GLOBAL_MODEL"] = st.sidebar.checkbox(
-    "Reset Global Model Each Round",
-    value=st.session_state.simulation_params["RESET_GLOBAL_MODEL"]
-)
+res = st.session_state.last_result
+if res is not None:
+    st.subheader("Final metrics (hold-out test)")
+    st.json(res.final_metrics)
+    st.subheader("Privacy reporting")
+    st.json(res.privacy)
+    if res.mia:
+        st.subheader("Membership-inference probe (heuristic)")
+        st.json(res.mia)
+    st.subheader("Round history")
+    st.dataframe(res.history)
 
-if st.sidebar.button("Reset Simulation"):
-    st.session_state.global_model = None
-    st.success("Simulation state reset.")
+    plot_path = Path("plots/streamlit_last_round.png")
+    if plot_path.is_file():
+        st.image(str(plot_path), caption="Validation accuracy by round (this UI run)")
 
-# ------------------------------------------------
-# Main UI Controls
-# ------------------------------------------------
-st.title("Federated Learning Simulation UI")
-run_simulation = st.button("Run Federated Training")
-
-if run_simulation:
-    st.info("Starting federated training simulation. This may take a while...")
-    global_model = simulate_federated_learning(st.session_state.simulation_params)
-    st.session_state.global_model = global_model
-    st.success("Federated training simulation completed.")
-
-if st.session_state.global_model is not None:
-    st.header("Global Model Evaluation")
-    st.write("The global model has been updated over the federated rounds.")
-    if os.path.exists("plots/accuracy_privacy.png"):
-        st.image("plots/accuracy_privacy.png", caption="Accuracy vs. Privacy (ε)")
-    if os.path.exists("plots/roc_curve.png"):
-        st.image("plots/roc_curve.png", caption="ROC Curve")
-    st.subheader("Global Model Summary")
-    st.text(st.session_state.global_model.summary())
-
-if st.button("Re-run Simulation"):
-    st.session_state.global_model = None
-    st.experimental_rerun()
+    st.download_button(
+        "Download last result JSON",
+        data=json.dumps(
+            {
+                "final_metrics": res.final_metrics,
+                "privacy": res.privacy,
+                "mia": res.mia,
+                "partition_info": res.partition_info,
+                "history": res.history,
+            },
+            indent=2,
+        ),
+        file_name="federated_run.json",
+    )
