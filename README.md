@@ -1,133 +1,165 @@
-# Federated Learning Simulation with Differential Privacy
-This repository implements a simulation framework for federated learning with integrated differential privacy. The simulation trains an Electronic Health Record (EHR) classification model over multiple clients, applying privacy-preserving techniques and visualizing key performance metrics.
+# Federated EHR classification benchmark (simulation)
 
-## Features
-- Simulates distributed training over multiple clients.
+This repository is a **small, transparent benchmark** for studying federated learning (FL) and local differential privacy (DP) mechanisms on **tabular, EHR-like** data. It is intended for **research and education**, not as production infrastructure for regulated health data.
 
-- Applies differential privacy through a custom DPAdam optimizer and per-example gradient clipping.
+---
 
-- Uses gradient clustering techniques to aggregate client updates robustly.
+## 1. Motivation
 
-## Visualization
+Electronic health records are high-stakes: they encode sensitive conditions, visits, and outcomes. Centralizing raw records for machine learning reduces organizational control and expands the attack surface (insider risk, breaches, subpoenas, and secondary use beyond patient expectations). **Federated learning** keeps raw training data at each site and exchanges only model updates, which can reduce some data-movement risks **when paired with appropriate governance and security**. **Differential privacy** can bound the influence of any single record on released statistics or updates, but only under explicit **mechanism definitions, threat models, and accounting assumptions**.
 
-Generates plots for:
+This project does **not** claim to make a deployment “secure” or “private” in a legal or clinical sense. It provides a **controlled simulation** so you can reason about **accuracy, empirical leakage probes, and (optionally) DP budget estimates** side by side.
 
-1. Accuracy vs. Privacy (ε)
+---
 
-2. ROC Curve
+## 2. What the simulation does
 
-3. Resource Consumption
+- Loads a CSV with EHR-like features and a binary label (`SOURCE`: `in` / `out` in the sample datasets).
+- Splits data into train / validation / test.
+- Partitions the training set across **clients** using **IID** or **non-IID** schemes (Dirichlet label skew or a simple label-skew baseline).
+- Runs **FedAvg-style** global rounds: each client trains locally, then the server averages client weights (sample-size weighted).
+- Optional **local DP-SGD-style** updates: **per-example gradient clipping** and **Gaussian noise** on the **mean clipped gradient** of each minibatch (implementation in `src/privacy.py`).
+- Evaluates the global model on held-out data and writes JSON + plots.
+- Runs a **simple loss-based membership inference probe** (`src/attacks.py`) to make privacy–utility tradeoffs discussable.
 
-4. Comparative Performance Table
+Code layout:
 
-## Interactive UI
+| Module | Role |
+|--------|------|
+| `src/data.py` | Loading, scaling, IID / non-IID partitions |
+| `src/model.py` | Small MLP classifier |
+| `src/privacy.py` | Clipping, noise, optional ε accounting helpers |
+| `src/federated.py` | FedAvg simulation loop |
+| `src/attacks.py` | Heuristic membership inference probe |
+| `src/evaluation.py` | Accuracy / AUC metrics |
+| `src/visualization.py` | Plots from **measured** histories |
+| `src/run_experiment.py` | YAML-driven CLI |
 
-A Streamlit web application provides an interactive interface for setting parameters and running simulations.
+Legacy TensorFlow utilities remain under `models/`, `dp_engine/`, and `clustering/` from an earlier demo; the **supported path** is the `src/` stack above.
 
-## Project Structure
-- **streamlit_app.py:**
-The Streamlit UI that allows you to configure simulation parameters and trigger federated training.
+---
 
-- **main.py:**
-Contains the core simulation code including data loading, federated training, gradient aggregation, and plotting.
+## 3. Threat model (what is and is not assumed)
 
-- **data_loader.py:**
-Loads and preprocesses the EHR data from a CSV file (expects data/patient_treatment.csv).
+**In scope for this benchmark (simplified):**
 
-- **model.py:**
-Defines the deep neural network model used for EHR classification.
+- Honest-but-curious **central aggregator** that observes **client model updates** each round (full vectors; no secure aggregation or encryption).
+- **Local DP noise and clipping** applied during client training before sending weights (simulated on one machine; not a cryptographic protocol).
+- **Membership inference** evaluated with a **naïve loss-threshold heuristic** on pooled scores (optimistic; see limitations).
 
-- **dp_optimizer.py:**
-Implements the DPAdam optimizer and functions for differentially private gradient computation.
+**Explicitly out of scope:**
 
-- **gradient_clustering.py:**
-Provides functions for clustering and aggregating gradients from clients.
+- Secure multi-party computation, homomorphic encryption, trusted execution environments, or differential privacy under **arbitrary adaptive composition** across unrelated studies.
+- Federated **personalization**, poisoning robustness, system heterogeneity, and real-world networking / failure modes.
+- Regulatory compliance (HIPAA, GDPR, etc.): this code does not implement legal controls.
 
-- **plots/:**
-Directory where simulation output images (e.g., roc_curve.png, accuracy_privacy.png, comparative_table.png, resource_consumption.png) are saved.
+---
 
-## Requirements
-- Python 3.7 or higher
+## 4. Experiment setup
 
-- TensorFlow
+- **Data:** `data/synthetic_ehr_fixture.csv` (tiny, for tests and quick runs) or `data/patient_treatment.csv` (larger demo CSV).
+- **Configs:** `configs/baseline.yaml`, `configs/dp_low_noise.yaml`, `configs/dp_high_noise.yaml`, `configs/non_iid.yaml`.
+- **Reproducibility:** set `seed` in YAML; training uses PyTorch and NumPy RNGs on CPU by default.
 
-- Streamlit
+---
 
-- NumPy
+## 5. Privacy mechanisms
 
-- Pandas
+- **Gradient L2 clipping** with bound `C` (`dp.l2_clip`).
+- **Gaussian noise** on the averaged clipped minibatch gradient with multiplier `σ` (`dp.noise_multiplier`), using the common DP-SGD scaling `stddev = σ · C / B` on the **mean** gradient (see `src/privacy.py`).
+- **DP disabled:** when `dp.enabled` is `false`, clients run ordinary minibatch SGD (no clipping/noise in the DP path).
 
-- scikit-learn
+### Privacy accounting (honest limitations)
 
-- psutil
+When `tensorflow-privacy` is installed and imports succeed, `compute_dp_sgd_privacy` is used to report **approximate (ε, δ)** for a **standard DP-SGD analysis** with **Poisson subsampling assumptions** (see `src/privacy.py` docstring). This benchmark’s dataloader uses **shuffle-and-partition batches**, so the reported ε is a **tooling approximation**, not a formally matched analysis for every implementation detail.
 
-- Optional: TensorFlow Privacy (for computing DP epsilon)
+If the accountant is unavailable (default `requirements.txt` omits TensorFlow stacks), **ε is reported as `null`** in JSON output; you should reason about `C`, `σ`, and batch size directly, or install optional dependencies.
 
-## Install the dependencies using pip:
+**Federated composition:** per-client ε estimates treat each partition size as `n` and multiply effective epochs by `num_global_rounds`. This is a **reporting aid** for the simulation, not a full **cross-silo** DP guarantee without additional assumptions (see disclaimer string in JSON under `privacy.accounting`).
+
+---
+
+## 6. Aggregation method
+
+**Sample-size weighted FedAvg** over full model state tensors after each client finishes its local epochs for the round:
+
+\[
+\theta_{t+1} = \sum_i \frac{n_i}{\sum_j n_j} \theta_{t}^{(i)}
+\]
+
+Optional `global_lr` interpolates between the previous global weights and this average (`1.0` = pure FedAvg).
+
+---
+
+## 7. Metrics
+
+- **Utility:** accuracy and ROC-AUC on validation and held-out test (`src/evaluation.py`).
+- **Privacy probe:** loss-based membership inference AUC / accuracy (`src/attacks.py`) — **not** a state-of-the-art attack.
+- **Reporting:** `privacy` block in JSON (DP hyperparameters + optional accountant output).
+
+---
+
+## 8. How to reproduce
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m pytest tests/ -q
+python -m src.run_experiment --config configs/baseline.yaml
 ```
 
-## Setup Instructions
-1. Clone the Repository:
+Optional UI:
 
 ```bash
-git clone [<repository-url>](https://github.com/iamrishabruh/difflearn/)
-cd your/path/
-```
-
-2. Prepare the Data:
-
-```bash
-1. Place your EHR data file (e.g., patient_treatment.csv) into a folder named data in the root directory.
-2. Ensure the CSV file contains the necessary columns (e.g., SEX, HAEMATOCRIT, HAEMOGLOBINS, AGE, etc.). See data_loader.py for details on preprocessing.
-```
-
-3. Run the Simulation:
-
-  - **Using the Command Line:**
-
-```bash
-python main.py
-This will execute federated training and generate plots saved in the plots folder.
-```
-
-  - **Using the Streamlit UI:**
-
-```bash
+python -m pip install -r requirements-ui.txt
 streamlit run streamlit_app.py
-Use the sidebar controls to adjust simulation parameters, then click Run Federated Training. The app displays the simulation progress, evaluation metrics, and generated plots.
 ```
 
-## Output
-After running the simulation, you will see:
+Optional ε accounting (may install TensorFlow):
 
-**Global Model Evaluation:**
-The summary of the updated global model along with evaluation metrics (loss and accuracy) on a validation set.
+```bash
+python -m pip install tensorflow tensorflow-privacy
+```
 
-**Generated Plots:**
-The following plots will be saved in the plots/ directory:
+---
 
-- **accuracy_privacy.png:** Accuracy vs. Privacy (ε) trade-off.
+## 9. Example results (synthetic fixture, **not** cherry-picked)
 
-- **roc_curve.png:** Receiver Operating Characteristic curve.
+The table below was produced on this repository’s **synthetic CSV** with the bundled configs on a CI-like CPU run (`python -m src.run_experiment --config ...`). **Do not** treat these numbers as clinical performance; they illustrate **relative** behaviour on a toy dataset.
 
-- **comparative_table.png:** Comparative performance table.
+| Config | Test accuracy | Val accuracy | MIA AUC (loss probe) | Reported ε (DP accountant) |
+|--------|---------------|--------------|----------------------|----------------------------|
+| `baseline` (no DP) | 0.909 | 1.000 | 0.608 | N/A (DP off) |
+| `dp_low_noise` | 0.818 | 0.714 | 0.598 | `null` (optional dep not installed) |
+| `dp_high_noise` | 0.727 | 0.714 | 0.591 | `null` |
+| `non_iid` (Dirichlet α=0.3) | 1.000 | 1.000 | 0.528 | `null` |
 
-- **resource_consumption.png:** Resource consumption during training.
+**Notes:**
 
-## Customization
+- ε is `null` here because the default install omits `tensorflow-privacy`. With the accountant available, fill this column from `results/*.json` → `privacy.accounting.per_client[*].epsilon`.
+- The **non-IID** row can look optimistic on a **tiny** dataset; this is why we call it a **fixture**, not a realism study.
+- MIA uses a **median threshold on pooled member/non-member scores** — it is an optimistic, coarse probe (see `src/attacks.py`).
 
-- Modify default parameters in streamlit_app.py or main.py to adjust the number of clients, local epochs, learning rates, and other hyperparameters.
+---
 
-- Update model.py if you wish to change the neural network architecture.
+## 10. Limitations
 
-- Modify data_loader.py to suit the format and requirements of your dataset.
+- **Simulation only:** all clients run in one process; there is no real network, straggler handling, or tamper-resistant hardware.
+- **Local DP ≠ global end-to-end DP** across institutions without further assumptions and mechanisms.
+- **Accountant mismatch risk** if you compare reported ε to non-standard batching or noise schedules.
+- **MIA probe** is deliberately simple; lower AUC does not prove strong privacy against stronger adversaries.
+- **EHR realism:** synthetic and demo CSVs lack longitudinal structure, coding systems, missingness patterns, and confounding present in real workflows.
+
+---
+
+## 11. Future work
+
+- Secure aggregation noise / cryptographic protocols (documented separately from DP noise).
+- Stronger attacks (LiRA-style) and canary evaluation protocols.
+- Per-client personalization and fairness metrics under skew.
+- Better alignment between **sampling** in code and **privacy accountant** assumptions (or switch to a PyTorch-native accountant with explicit batch sampler model).
+
+---
 
 ## License
-This project is licensed under the MIT License.
 
-## Acknowledgments
-This project leverages TensorFlow, Streamlit, scikit-learn, and other open-source libraries to simulate federated learning with differential privacy. Special thanks to the contributors and open-source community for their invaluable tools and resources.
-
+See repository license (MIT in prior versions of this project).

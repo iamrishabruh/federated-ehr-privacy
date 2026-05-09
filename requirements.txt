@@ -1,11 +1,16 @@
-tensorflow-deps==2.10.0         # Apple M-series dependencies
-tensorflow-macos==2.10.0        # Core TensorFlow for M1/M2
-tensorflow-metal==0.7.0         # GPU acceleration
-tensorflow-privacy==0.7.0       # Differential privacy
-numpy==1.23.5                   # Fixed for M1 compatibility
-pandas==1.5.3
-scikit-learn==1.2.2
-matplotlib==3.7.1
-plotly==5.15.0
-psutil==5.9.5
-seaborn>=0.11.0
+# Core benchmark (Linux/macOS/CI). PyTorch is used for the simulation and tests.
+torch>=2.0.0
+numpy>=1.23.0
+pandas>=1.5.0
+scikit-learn>=1.2.0
+matplotlib>=3.7.0
+PyYAML>=6.0
+pytest>=7.0.0
+
+# Optional interactive UI (not required for CLI benchmark or CI).
+# streamlit>=1.28.0
+
+# Optional: DP-SGD epsilon accounting via RDP composition (see README limitations).
+# Often pulls TensorFlow; install only if you need numeric ε from the accountant.
+# tensorflow>=2.12.0
+# tensorflow-privacy>=0.8.0
